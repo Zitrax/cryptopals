@@ -1,4 +1,6 @@
 #include <algorithm>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <map>
 #include <ranges>
@@ -105,17 +107,21 @@ auto bytesToStr(const buffer& bytes) {
   return ss.str();
 }
 
-auto tryKeys(const buffer& bytes) {
-  std::vector<std::tuple<double, unsigned char, std::string>> scores;
+using decrypt = std::tuple<double, unsigned char, std::string>;
+
+auto tryKeys(const buffer& bytes, bool printTop = false) {
+  std::vector<decrypt> scores;
   for (unsigned char c = 0; c < 255; c++) {
     const auto buf = xorKey(bytes, {c});
     scores.push_back({charFrequenzy(buf), c, bytesToStr(buf)});
   }
-  std::sort(scores.begin(), scores.end());
-  // Print top 10 candidates
-  for (unsigned i = 0; i < 10; i++) {
-    const auto& [f, c, s] = scores[i];
-    std::cout << f << " " << c << " " << s << std::endl;
+  std::ranges::sort(scores);
+  if (printTop) {
+    // Print top 10 candidates
+    for (unsigned i = 0; i < 10; i++) {
+      const auto& [f, c, s] = scores[i];
+      std::cout << f << " " << c << " " << s << "\n";
+    }
   }
   return scores[0];
 }
@@ -149,40 +155,71 @@ auto base64ToStr(const buffer& bytes) {
   return ss.str();
 }
 
+auto tryFromFile(const std::filesystem::path& path) {
+  std::ifstream inf{path};
+  if (!inf) {
+    throw std::invalid_argument("Could not open file");
+  }
+  std::vector<decrypt> decrypts;
+  std::string line;
+  while (std::getline(inf, line)) {
+    const auto decrypt = tryKeys(hexStringToBytes(line));
+    decrypts.push_back(decrypt);
+  }
+  std::ranges::sort(decrypts);
+  return decrypts.front();
+}
+
 int main() {
   // 1
-  const auto bytes = hexStringToBytes(
-      "49276d206b696c6c696e6720796f757220627261696e206c696b65206120706f69736f6e"
-      "6f7573206d757368726f6f6d");
-  const auto base64 = toBase64(bytes);
-  const auto base64str = base64ToStr(base64);
-  std::cout << base64str << std::endl;
-  const auto expected =
-      "SSdtIGtpbGxpbmcgeW91ciBicmFpbiBsaWtlIGEgcG9pc29ub3VzIG11c2hyb29t";
-  if (expected != base64str) {
-    throw std::runtime_error("Invalid challenge 1");
+  {
+    const auto bytes = hexStringToBytes(
+        "49276d206b696c6c696e6720796f757220627261696e206c696b65206120706f69736f"
+        "6e"
+        "6f7573206d757368726f6f6d");
+    const auto base64 = toBase64(bytes);
+    const auto base64str = base64ToStr(base64);
+    std::cout << base64str << "\n";
+    const auto expected =
+        "SSdtIGtpbGxpbmcgeW91ciBicmFpbiBsaWtlIGEgcG9pc29ub3VzIG11c2hyb29t";
+    if (expected != base64str) {
+      throw std::runtime_error("Invalid challenge 1");
+    }
   }
 
   // 2
-  const auto bytes2_1 =
-      hexStringToBytes("1c0111001f010100061a024b53535009181c");
-  const auto bytes2_2 =
-      hexStringToBytes("686974207468652062756c6c277320657965");
-  const auto xored = xorBuffers(bytes2_1, bytes2_2);
-  const auto xoredHex = bytesToHex(xored);
-  std::cout << xoredHex << std::endl;
-  const auto expected2 = "746865206b696420646f6e277420706c6179";
-  if (xoredHex != expected2) {
-    throw std::runtime_error("Invalid challenge 2");
+  {
+    const auto bytes2_1 =
+        hexStringToBytes("1c0111001f010100061a024b53535009181c");
+    const auto bytes2_2 =
+        hexStringToBytes("686974207468652062756c6c277320657965");
+    const auto xored = xorBuffers(bytes2_1, bytes2_2);
+    const auto xoredHex = bytesToHex(xored);
+    std::cout << xoredHex << "\n";
+    const auto expected2 = "746865206b696420646f6e277420706c6179";
+    if (xoredHex != expected2) {
+      throw std::runtime_error("Invalid challenge 2");
+    }
+  }
+  // 3
+  {
+    const auto bytes3 = hexStringToBytes(
+        "1b37373331363f78151b7f2b783431333d78397828372d363c78373e783a393b3736");
+    const auto s = tryKeys(bytes3);
+    std::cout << std::get<2>(s) << "\n";
+    if (std::get<1>(s) != 'X' ||
+        std::get<2>(s) != "Cooking MC's like a pound of bacon") {
+      throw std::runtime_error("Invalid challenge 3");
+    }
   }
 
-  // 3
-  const auto bytes3 = hexStringToBytes(
-      "1b37373331363f78151b7f2b783431333d78397828372d363c78373e783a393b3736");
-  const auto s = tryKeys(bytes3);
-  if (std::get<1>(s) != 'X' ||
-      std::get<2>(s) != "Cooking MC's like a pound of bacon") {
-    throw std::runtime_error("Invalid challenge 3");
+  // 4
+  {
+    const auto& [f, c, s] = tryFromFile("4.txt");
+    std::cout << f << " " << c << " " << s << "\n";
+    if (s != "Now that the party is jumping\n") {
+      throw std::runtime_error("Invalid challenge 4");
+    }
   }
 
   return 0;
