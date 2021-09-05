@@ -92,9 +92,10 @@ auto charFrequenzy(const buffer& bytes) {
 
 auto bytesToHex(const buffer& bytes) {
   std::stringstream ss;
+  ss << std::hex << std::setfill('0');
   for (uint8_t byte : bytes) {
     // Important to cast (uint8_t is treated as a char)
-    ss << std::hex << static_cast<uint32_t>(byte);
+    ss << std::setw(2) << static_cast<uint32_t>(byte);
   }
   return ss.str();
 }
@@ -105,6 +106,14 @@ auto bytesToStr(const buffer& bytes) {
     ss << byte;
   }
   return ss.str();
+}
+
+auto strToBytes(const std::string& str) {
+  buffer buf;
+  buf.reserve(str.size());
+  std::ranges::transform(str, std::back_inserter(buf),
+                         [](auto c) { return static_cast<uint8_t>(c); });
+  return buf;
 }
 
 using decrypt = std::tuple<double, unsigned char, std::string>;
@@ -201,6 +210,7 @@ int main() {
       throw std::runtime_error("Invalid challenge 2");
     }
   }
+
   // 3
   {
     const auto bytes3 = hexStringToBytes(
@@ -219,6 +229,21 @@ int main() {
     std::cout << f << " " << c << " " << s << "\n";
     if (s != "Now that the party is jumping\n") {
       throw std::runtime_error("Invalid challenge 4");
+    }
+  }
+
+  // 5
+  {
+    const auto input = strToBytes(
+        "Burning 'em, if you ain't quick and nimble\nI go crazy when I hear a "
+        "cymbal");
+    const auto encrypted = xorKey(input, strToBytes("ICE"));
+    const auto expected =
+        "0b3637272a2b2e63622c2e69692a23693a2a3c6324202d623d63343c2a262263242727"
+        "65272a282b2f20430a652e2c652a3124333a653e2b2027630c692b2028316528632630"
+        "2e27282f";
+    if (bytesToHex(encrypted) != expected) {
+      throw std::runtime_error("Invalid challenge 5");
     }
   }
 
