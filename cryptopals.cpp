@@ -1,8 +1,10 @@
 #include <algorithm>
+#include <bit>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <numeric>
 #include <ranges>
 #include <set>
 #include <sstream>
@@ -33,6 +35,19 @@ auto toBase64(const buffer& hex) {
     out.push_back((val & 0b000000000000000000111111) >> 0);
   }
 
+  return out;
+}
+
+auto fromBase64(const buffer& b64) {
+  buffer out;
+  out.reserve(3 * (b64.size() / 4));
+  for (std::size_t i = 0; i < b64.size(); i += 4) {
+    const uint32_t val = (b64[i + 0] << 18) + (b64[i + 1] << 12) +
+                         (b64[i + 2] << 6) + (b64[i + 3] << 0);
+    out.push_back((val & 0xFF0000) >> 16);
+    out.push_back((val & 0xFF00) >> 8);
+    out.push_back((val & 0xFF) >> 0);
+  }
   return out;
 }
 
@@ -100,6 +115,14 @@ auto bytesToHex(const buffer& bytes) {
   return ss.str();
 }
 
+// auto hexToBytes(const std::string& str) {
+//  buffer buf;
+//  buf.reserve(str.size());
+//  std::ranges::transform(str, std::back_inserter(buf),
+//                         [](auto c) { return static_cast<uint8_t>(c); });
+//  return buf;
+//}
+
 auto bytesToStr(const buffer& bytes) {
   std::stringstream ss;
   for (uint8_t byte : bytes) {
@@ -129,7 +152,8 @@ auto tryKeys(const buffer& bytes, bool printTop = false) {
     // Print top 10 candidates
     for (unsigned i = 0; i < 10; i++) {
       const auto& [f, c, s] = scores[i];
-      std::cout << f << " " << c << " " << s << "\n";
+      std::cout << f << " '" << c << "' (" << static_cast<int>(c) << ") " << s
+                << "\n";
     }
   }
   return scores[0];
@@ -150,6 +174,7 @@ auto hexStringToBytes(const std::string& str) {
 auto base64ToStr(const buffer& bytes) {
   std::stringstream ss;
   for (uint8_t byte : bytes) {
+    std::cout << static_cast<int>(byte) << "\n";
     if (byte <= 25)
       ss << static_cast<char>('A' + byte);
     else if (byte <= 51)
@@ -158,8 +183,10 @@ auto base64ToStr(const buffer& bytes) {
       ss << static_cast<char>('0' + byte - 52);
     else if (byte == 62)
       ss << '+';
-    else
+    else {
+      std::cout << byte << "\n";
       ss << '/';
+    }
   }
   return ss.str();
 }
@@ -179,14 +206,34 @@ auto tryFromFile(const std::filesystem::path& path) {
   return decrypts.front();
 }
 
+unsigned hammingDistance(const std::string& a, const std::string& b) {
+  if (a.size() != b.size()) {
+    throw std::invalid_argument("Strings must be of equal length");
+  }
+  const auto xored = xorBuffers(strToBytes(a), strToBytes(b));
+  return std::accumulate(xored.begin(), xored.end(), 0, [](unsigned a, auto b) {
+    return a + std::popcount(b);
+  });
+}
+
 int main() {
   // 1
   {
+    std::cout << "Challenge 1\n";
     const auto bytes = hexStringToBytes(
         "49276d206b696c6c696e6720796f757220627261696e206c696b65206120706f69736f"
         "6e"
         "6f7573206d757368726f6f6d");
     const auto base64 = toBase64(bytes);
+
+    // Not needed here, but verify fromBase64
+    const auto fb64 = fromBase64(base64);
+    if (fb64 != bytes) {
+      std::cout << "'" << bytesToStr(fb64) << "'\n"
+                << "'" << bytesToStr(bytes) << "'\n";
+      throw std::runtime_error("invalid fromBase64");
+    }
+
     const auto base64str = base64ToStr(base64);
     std::cout << base64str << "\n";
     const auto expected =
@@ -198,6 +245,7 @@ int main() {
 
   // 2
   {
+    std::cout << "Challenge 2\n";
     const auto bytes2_1 =
         hexStringToBytes("1c0111001f010100061a024b53535009181c");
     const auto bytes2_2 =
@@ -213,6 +261,7 @@ int main() {
 
   // 3
   {
+    std::cout << "Challenge 3\n";
     const auto bytes3 = hexStringToBytes(
         "1b37373331363f78151b7f2b783431333d78397828372d363c78373e783a393b3736");
     const auto s = tryKeys(bytes3);
@@ -225,7 +274,8 @@ int main() {
 
   // 4
   {
-    const auto& [f, c, s] = tryFromFile("4.txt");
+    std::cout << "Challenge 4\n";
+    const auto& [f, c, s] = tryFromFile("../4.txt");
     std::cout << f << " " << c << " " << s << "\n";
     if (s != "Now that the party is jumping\n") {
       throw std::runtime_error("Invalid challenge 4");
@@ -234,6 +284,7 @@ int main() {
 
   // 5
   {
+    std::cout << "Challenge 5\n";
     const auto input = strToBytes(
         "Burning 'em, if you ain't quick and nimble\nI go crazy when I hear a "
         "cymbal");
@@ -247,5 +298,54 @@ int main() {
     }
   }
 
+  // 6
+  {
+    std::cout << "Challenge 6\n";
+    const auto distance = hammingDistance("this is a test", "wokka wokka!!!");
+    if (distance != 37) {
+      throw std::runtime_error("Invalid challenge 6 (hamming)");
+    }
+
+    std::ifstream inf{"../6.txt"};
+    if (!inf) {
+      throw std::invalid_argument("Could not open file");
+    }
+    std::stringstream ss;
+    ss << inf.rdbuf();
+    const auto str = bytesToStr(fromBase64(strToBytes(ss.str())));
+    std::cout << ss.str() << "\n";
+    std::cout << str << "\n";
+
+    // Look for the keysize (at the moment, best guess - could try harder)
+    auto best = std::make_pair(std::numeric_limits<double>::max(), 0U);
+    for (unsigned ks = 1; ks < 40; ks++) {
+      const auto hd = hammingDistance(str.substr(0, ks), str.substr(ks, ks)) /
+                      static_cast<double>(ks);
+      if (hd < best.first) {
+        best.first = hd;
+        best.second = ks;
+      }
+      std::cout << hd << " " << ks << "\n";
+    }
+    std::cout << "Best candidate for keysize = " << best.second
+              << " with a hamming distance of " << best.first << "\n";
+
+    // Transpose blocks
+    const auto ks = best.second;
+    std::vector<std::stringstream> tblocks(ks);
+    for (unsigned i = 0; i < str.size(); i++) {
+      tblocks[i % ks] << str[i];
+    }
+
+    // Look for key byte for each transposed block
+    for (unsigned i = 0; i < ks; i++) {
+      const auto& [score, k, s] = tryKeys(strToBytes(tblocks[i].str()));
+      std::cout << "For i=" << i << " key = " << k << " with a score of "
+                << score << "\n";
+    }
+  }
+
   return 0;
 }
+
+// hex -> bytes -> base64

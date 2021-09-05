@@ -1,6 +1,6 @@
 cmake_minimum_required (VERSION 3.21.1)
 
-set(CMAKE_CXX_CLANG_TIDY clang-tidy-11)
+set(CMAKE_CXX_CLANG_TIDY clang-tidy-12)
 
 project(cryptopals)
 set(CMAKE_CXX_STANDARD 20)
