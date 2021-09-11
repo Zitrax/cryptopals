@@ -99,7 +99,7 @@ auto charFrequenzy(const buffer& bytes) {
 
   long score = 0;
   for (auto byte : bytes) {
-    score += english.contains(byte) ? english.at(byte) : 26;
+    score += english.contains(byte) ? english.at(byte) : 30;
   }
   // Does this work well for large texts?
   return static_cast<double>(score) / bytes.size();
@@ -114,14 +114,6 @@ auto bytesToHex(const buffer& bytes) {
   }
   return ss.str();
 }
-
-// auto hexToBytes(const std::string& str) {
-//  buffer buf;
-//  buf.reserve(str.size());
-//  std::ranges::transform(str, std::back_inserter(buf),
-//                         [](auto c) { return static_cast<uint8_t>(c); });
-//  return buf;
-//}
 
 auto bytesToStr(const buffer& bytes) {
   std::stringstream ss;
@@ -174,7 +166,6 @@ auto hexStringToBytes(const std::string& str) {
 auto base64ToStr(const buffer& bytes) {
   std::stringstream ss;
   for (uint8_t byte : bytes) {
-    std::cout << static_cast<int>(byte) << "\n";
     if (byte <= 25)
       ss << static_cast<char>('A' + byte);
     else if (byte <= 51)
@@ -184,11 +175,29 @@ auto base64ToStr(const buffer& bytes) {
     else if (byte == 62)
       ss << '+';
     else {
-      std::cout << byte << "\n";
       ss << '/';
     }
   }
   return ss.str();
+}
+
+auto strToBase64(const std::string& str) {
+  buffer buf;
+  buf.reserve(str.size());
+  for (auto c : str) {
+    const auto val = static_cast<uint8_t>(c);
+    if (val <= '9')
+      buf.push_back(val + 4);  // a 57 , b64 61
+    else if (val <= 'Z')
+      buf.push_back(val - 65);  // a 90, b64 25
+    else if (val <= 'z')
+      buf.push_back(val - 71);  // a 122, b64 51
+    else if (val == '+')
+      buf.push_back(62);
+    else
+      buf.push_back(63);
+  }
+  return buf;
 }
 
 auto tryFromFile(const std::filesystem::path& path) {
@@ -216,6 +225,59 @@ unsigned hammingDistance(const std::string& a, const std::string& b) {
   });
 }
 
+auto findKeySize(const std::string& str) {
+  std::vector<std::pair<double, unsigned>> hds;
+  for (unsigned ks = 1; ks <= 40; ks++) {
+    double avg = 0;
+    const auto N = std::min((str.size() / ks) - 1, 4UL);
+    for (unsigned n = 0; n < N; n++) {
+      const auto hd = hammingDistance(str.substr(n * ks, ks),
+                                      str.substr((n + 1) * ks, ks)) /
+                      static_cast<double>(ks);
+      avg = avg * (N - 1) / N + hd / N;
+    }
+    hds.push_back({avg, ks});
+  }
+  std::ranges::sort(hds);
+  return hds;
+}
+
+auto tryKeySizes(const std::vector<std::pair<double, unsigned>>& hds,
+                 const std::string& str) {
+  std::pair<double, buffer> best{std::numeric_limits<double>::max(), {}};
+  for (int cand = 0; cand < 5; cand++) {
+    std::cout << "Candidate " << cand << " for keysize = " << hds[cand].second
+              << " with a hamming distance of " << hds[cand].first << "\n";
+    // Transpose blocks
+    const auto ks = hds[cand].second;
+    std::vector<std::stringstream> tblocks(ks);
+    for (unsigned i = 0; i < str.size(); i++) {
+      tblocks[i % ks] << str[i];
+    }
+
+    // Look for key byte for each transposed block
+    buffer key;
+    for (unsigned i = 0; i < ks; i++) {
+      const auto& [score, k, s] = tryKeys(strToBytes(tblocks[i].str()));
+      key.push_back(k);
+    }
+    const auto decryptedBytes = xorKey(strToBytes(str), key);
+    const auto decryptedStr = bytesToStr(decryptedBytes);
+    const auto freq = charFrequenzy(decryptedBytes);
+    std::cout << "    Best key: " << bytesToStr(key) << "\n";
+    std::cout << "    Frequency: " << freq << "\n";
+    if (freq < best.first) {
+      best = {freq, key};
+    }
+  }
+  auto& [fr, key] = best;
+  std::cout << "Best key found with keysize " << key.size() << " and value '"
+            << bytesToStr(key) << "' with frequency " << fr << "\n";
+  std::cout << "Best decryption:\n\n"
+            << bytesToStr(xorKey(strToBytes(str), key)) << "\n";
+  return bytesToStr(key);
+}
+
 int main() {
   // 1
   {
@@ -225,16 +287,22 @@ int main() {
         "6e"
         "6f7573206d757368726f6f6d");
     const auto base64 = toBase64(bytes);
+    const auto base64str = base64ToStr(base64);
 
-    // Not needed here, but verify fromBase64
-    const auto fb64 = fromBase64(base64);
-    if (fb64 != bytes) {
-      std::cout << "'" << bytesToStr(fb64) << "'\n"
-                << "'" << bytesToStr(bytes) << "'\n";
+    // Not needed here, but verify back conversion
+    const auto fb64str = strToBase64(base64str);
+    if (fb64str != base64) {
+      std::cout << "'" << bytesToStr(base64) << "'\n"
+                << "'" << bytesToStr(fb64str) << "'\n";
+      throw std::runtime_error("invalid strToBase64");
+    }
+    const auto fb64 = fromBase64(fb64str);
+    if (bytes != fb64) {
+      std::cout << "'" << bytesToStr(bytes) << "'\n"
+                << "'" << bytesToStr(fb64) << "'\n";
       throw std::runtime_error("invalid fromBase64");
     }
 
-    const auto base64str = base64ToStr(base64);
     std::cout << base64str << "\n";
     const auto expected =
         "SSdtIGtpbGxpbmcgeW91ciBicmFpbiBsaWtlIGEgcG9pc29ub3VzIG11c2hyb29t";
@@ -298,6 +366,32 @@ int main() {
     }
   }
 
+  // Test same procedure as ch 6 with known data/key
+  {
+    std::cout << "Challenge 6 (Pre-test)\n";
+    const std::string txt =
+        "There was once a little house that could not jump, neither could it "
+        "swim. The house was 5 meters tall without any trees growing far from "
+        "it. Everything is yellow, nothing is red or green. Many cats purred.";
+    const std::string key = "zitrax";
+    const auto encrypted = xorKey(strToBytes(txt), strToBytes(key));
+    const std::string b64encStr = base64ToStr(toBase64(encrypted));
+
+    std::cout << "Test encryption:\n" << b64encStr << "\n";
+
+    // Revert b64
+    const auto bytes = fromBase64(strToBase64(b64encStr));
+    const auto str = bytesToStr(bytes);
+
+    const auto hds = findKeySize(str);
+    tryKeySizes(hds, str);
+
+    // Note: currently the best match found is a multiple (4x) something that
+    // looks like the correct key which actually priduces a lower char
+    // frequenzy. The real key is the second best found however. Might work
+    // better with a longer text?
+  }
+
   // 6
   {
     std::cout << "Challenge 6\n";
@@ -312,40 +406,23 @@ int main() {
     }
     std::stringstream ss;
     ss << inf.rdbuf();
-    const auto str = bytesToStr(fromBase64(strToBytes(ss.str())));
-    std::cout << ss.str() << "\n";
-    std::cout << str << "\n";
+    auto raw = ss.str();
+    raw.erase(std::remove(raw.begin(), raw.end(), '\n'), raw.end());
+    const auto bytes = fromBase64(strToBase64(raw));
+    const auto str = bytesToStr(bytes);
+
+    // std::cout << "Input:\n" << ss.str() << "\n\n";
+    // std::cout << "FromBase64:\n" << str << "\n\n";
 
     // Look for the keysize (at the moment, best guess - could try harder)
-    auto best = std::make_pair(std::numeric_limits<double>::max(), 0U);
-    for (unsigned ks = 1; ks < 40; ks++) {
-      const auto hd = hammingDistance(str.substr(0, ks), str.substr(ks, ks)) /
-                      static_cast<double>(ks);
-      if (hd < best.first) {
-        best.first = hd;
-        best.second = ks;
-      }
-      std::cout << hd << " " << ks << "\n";
-    }
-    std::cout << "Best candidate for keysize = " << best.second
-              << " with a hamming distance of " << best.first << "\n";
+    auto hds = findKeySize(str);
+    // Try found keysizes in order
+    const auto key = tryKeySizes(hds, str);
 
-    // Transpose blocks
-    const auto ks = best.second;
-    std::vector<std::stringstream> tblocks(ks);
-    for (unsigned i = 0; i < str.size(); i++) {
-      tblocks[i % ks] << str[i];
-    }
-
-    // Look for key byte for each transposed block
-    for (unsigned i = 0; i < ks; i++) {
-      const auto& [score, k, s] = tryKeys(strToBytes(tblocks[i].str()));
-      std::cout << "For i=" << i << " key = " << k << " with a score of "
-                << score << "\n";
+    if (key != "Terminator X: Bring the noise") {
+      throw std::runtime_error("Invalid challenge 6");
     }
   }
 
   return 0;
 }
-
-// hex -> bytes -> base64
